@@ -200,7 +200,7 @@ def min_edge_node_distances(edges: list[tuple[str, str]], node_locations: dict[s
             if node == edge[0] or node == edge[1]:
                 continue
 
-            slope = (B[1] - A[1]) / (B[0] - A[0])
+            slope = (B[1] - A[1]) / ((B[0] - A[0]) + 1e-10)
             intercept = A[1] - slope * A[0]
             line = lambda x: slope * x + intercept
             min_x = min(A[0], B[0])
@@ -238,11 +238,8 @@ def cost_fn(edges: list[tuple[str, str]], node_locations: dict[str, tuple[float,
     sq_edge_length = measure_squared_edge_length(edges, node_locations)
     min_edge_node_distance = min(list(min_edge_node_distances(edges, node_locations).values()))
 
-    if min_edge_node_distance == 0:
-        return float('inf')
 
-
-    return n_crossings - min_edge_node_distance * 0.1 + sq_edge_length * 0.1
+    return n_crossings + 1/(min_edge_node_distance+1e-6) + sq_edge_length * 0.02
  
 
 
@@ -316,10 +313,10 @@ def node_locations_from_layers(layers):
                 continue
             # y_offset = 0.25 if i % 2 == 1 else -0.25
             y_offset = 0
+            # node_locations[node] = (-(j + y_offset), -i)
             node_locations[node] = (i, j + y_offset)
         
     return node_locations
-
 
 def iter_swaps(layers):
     # iterate over different configurations of the layers where each node is swapped with a node in the same layer
@@ -328,12 +325,31 @@ def iter_swaps(layers):
     for i, layer in enumerate(layers):
         for j, node in enumerate(layer):
             for k, other_node in enumerate(layer):
+                if node == other_node:
+                    continue
+                
                 if j >= k: # only swap each node once
                     continue
                 new_layers = copy.deepcopy(layers)
                 new_layers[i][j] = other_node
                 new_layers[i][k] = node
                 yield new_layers
+
+
+def iter_double_swaps(layers):
+    for layer_config in iter_swaps(layers):
+        for layer_config2 in iter_swaps(layer_config):
+            yield layer_config2
+
+ 
+# def rand_swap(layers):
+#     # return new_layers with a random swap of two nodes in the same layer
+#     i = random.randint(0, len(layers)-1)
+#     j = random.randint(0, len(layers[i])-1)
+#     k = random.randint(0, len(layers[i])-1)
+#     new_layers = copy.deepcopy(layers)
+#     new_layers[i][j], new_layers[i][k] = new_layers[i][k], new_layers[i][j]
+#     return new_layers
 
 
 def get_formula_sheet(gc, spreadsheet_key):
@@ -385,8 +401,8 @@ def get_layout(formula_sheet):
         "name": "preset",
         "positions": {
             cell_name: {
-                'x': node_locations[cell_name][0]*100,
-                'y': node_locations[cell_name][1]*75
+                'x': -node_locations[cell_name][1]*100,
+                'y': -node_locations[cell_name][0]*75
             }
             for cell_name in cell_names
         }    
@@ -395,14 +411,14 @@ def get_layout(formula_sheet):
     return layout
 
 
-def build_cytoscape_component(gc, spreadsheet_key):
-    
+def build_cytoscape_component(gc, spreadsheet_key, id):
+
     formula_sheet = get_formula_sheet(gc, spreadsheet_key)
     elements = get_elements(formula_sheet)
     layout = get_layout(formula_sheet)
 
     return cyto.Cytoscape(
-        id="cytoscape",
+        id=id,
         layout=layout,
         stylesheet=[
             {
@@ -422,7 +438,7 @@ def build_cytoscape_component(gc, spreadsheet_key):
             {
                 "selector": "edge",
                 "style": {
-                    "mid-target-arrow-shape": "triangle",
+                    "target-arrow-shape": "triangle",
                     "curve-style": "bezier",
                     "line-color": "#888470",
                     "target-arrow-color": "#888470"
