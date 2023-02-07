@@ -5,6 +5,7 @@ import torch.functional as F
 import numpy as np
 import copy
 import random
+import dash_cytoscape as cyto
 
 def get_children(target_cell_name, formula_sheet):
     r, c = gspread.utils.a1_to_rowcol(target_cell_name)
@@ -333,3 +334,107 @@ def iter_swaps(layers):
                 new_layers[i][j] = other_node
                 new_layers[i][k] = node
                 yield new_layers
+
+
+def get_formula_sheet(gc, spreadsheet_key):
+    sh = gc.open_by_key(spreadsheet_key)
+    worksheet = sh.sheet1
+
+    formula_sheet = worksheet.get_values(value_render_option='FORMULA')
+
+    return formula_sheet
+
+
+def get_elements(formula_sheet):
+    edges = find_edges(formula_sheet)
+
+    cell_names = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
+
+    labels = get_labels(cell_names, formula_sheet)
+    elements = [
+        {
+            'data': {
+                'id': cell_name,
+                'label': label
+            }
+        } 
+        for cell_name, label in zip(cell_names, labels)
+    ]
+
+    elements += [
+        {
+            'data': {
+                'id': f'{edge[0]}-{edge[1]}',
+                'source': edge[0], 
+                'target': edge[1]
+            }
+        }
+        for edge in edges
+    ]
+
+    return elements
+
+
+def get_layout(formula_sheet):
+    edges = find_edges(formula_sheet)
+    cell_names = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
+
+    node_locations = get_node_locations_v2(edges)
+
+    layout = {
+        "name": "preset",
+        "positions": {
+            cell_name: {
+                'x': node_locations[cell_name][0]*100,
+                'y': node_locations[cell_name][1]*75
+            }
+            for cell_name in cell_names
+        }    
+    }
+
+    return layout
+
+
+def build_cytoscape_component(gc, spreadsheet_key):
+    
+    formula_sheet = get_formula_sheet(gc, spreadsheet_key)
+    elements = get_elements(formula_sheet)
+    layout = get_layout(formula_sheet)
+
+    return cyto.Cytoscape(
+        id="cytoscape",
+        layout=layout,
+        stylesheet=[
+            {
+                'selector': 'node',
+                'style': {
+                    'content': 'data(label)',
+                    "text-wrap": "wrap",
+                    "text-max-width": 80,
+                    "background-color": "#A0A28F",
+                    "color": "white",
+                    "font-family": "monospace",
+                    "text-background-opacity": 0.7,
+                    "text-background-color": "#272822",
+                    "font-size": 10,
+                }
+            },
+            {
+                "selector": "edge",
+                "style": {
+                    "mid-target-arrow-shape": "triangle",
+                    "curve-style": "bezier",
+                    "line-color": "#888470",
+                    "target-arrow-color": "#888470"
+                }
+            }
+        ],
+        style={
+            'width': '100%',
+            'height': '100vh',
+            'border-style':
+            'solid',
+            "background-color": "#272822"
+        },
+        elements=elements
+    )
