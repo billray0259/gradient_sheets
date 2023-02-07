@@ -3,6 +3,8 @@ import re
 from torch import Tensor, optim
 import torch.functional as F
 import numpy as np
+import copy
+import random
 
 def get_children(target_cell_name, formula_sheet):
     r, c = gspread.utils.a1_to_rowcol(target_cell_name)
@@ -42,7 +44,7 @@ def get_labels(cell_names, formula_sheet):
     return labels
 
 
-def get_node_locations(edges: list[tuple[str, str]]):
+def get_node_locations_v1(edges: list[tuple[str, str]]):
 
     # here's the plan
     # Display the nodes in layers
@@ -161,9 +163,173 @@ def get_node_locations(edges: list[tuple[str, str]]):
     
     return node_locations
 
+
+
+def count_crossings(edges: list[tuple[str, str]], node_locations: dict[str, tuple[float, float]]):
+    crossings = 0
+    for i, edge1 in enumerate(edges):
+        for j, edge2 in enumerate(edges):
+            if i >= j: # only count each edge once
+                continue
+
+            if edge1[0] == edge2[0] or edge1[0] == edge2[1] or edge1[1] == edge2[0] or edge1[1] == edge2[1]: # don't count edges that share a node
+                continue
+
+            A = node_locations[edge1[0]]
+            B = node_locations[edge1[1]] 
+
+            C = node_locations[edge2[0]] 
+            D = node_locations[edge2[1]]
+
+            def ccw(A, B, C):
+                return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+            
+            crossings += ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
+
+    return crossings
+
+
+def min_edge_node_distances(edges: list[tuple[str, str]], node_locations: dict[str, tuple[float, float]]):
+    edge_node_distances = {}
+    for node in node_locations:
+        for edge in edges:
+            A = node_locations[edge[0]]
+            B = node_locations[edge[1]] 
+
+            if node == edge[0] or node == edge[1]:
+                continue
+
+            slope = (B[1] - A[1]) / (B[0] - A[0])
+            intercept = A[1] - slope * A[0]
+            line = lambda x: slope * x + intercept
+            min_x = min(A[0], B[0])
+            max_x = max(A[0], B[0])
+
+            if not (min_x < node_locations[node][0] < max_x):
+                continue
+        
+            distance = abs(line(node_locations[node][0]) - node_locations[node][1])
+
+            if node not in edge_node_distances:
+                edge_node_distances[node] = distance
+            elif distance < edge_node_distances[node]:
+                edge_node_distances[node] = distance
+            
+    return edge_node_distances
+
+
+            
+
+
+def measure_squared_edge_length(edges: list[tuple[str, str]], node_locations: dict[str, tuple[float, float]]):
+    total_length = 0
+    for edge in edges:
+        A = node_locations[edge[0]]
+        B = node_locations[edge[1]] 
+
+        total_length += ((A[0] - B[0])**2 + (A[1] - B[1])**2)
     
+    return total_length
 
 
+def cost_fn(edges: list[tuple[str, str]], node_locations: dict[str, tuple[float, float]]):
+    n_crossings = count_crossings(edges, node_locations)
+    sq_edge_length = measure_squared_edge_length(edges, node_locations)
+    min_edge_node_distance = min(list(min_edge_node_distances(edges, node_locations).values()))
 
+    if min_edge_node_distance == 0:
+        return float('inf')
+
+
+    return n_crossings - min_edge_node_distance * 0.1 + sq_edge_length * 0.1
+ 
+
+
+def get_node_locations_v2(edges: list[tuple[str, str]]):
+    cell_names = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
+    cell_names = sorted(cell_names)
+
+    # first we need to figure out which layer each node is in
+    layer_idx = {} # maps cell name to layer index
+    current_layer = set([edge[0] for edge in edges]) - set([edge[1] for edge in edges]) # only nodes with no inputs
+    
+    i = 0
+    while current_layer:
+        for node in current_layer:
+            layer_idx[node] = i
+        current_layer = {edge[1] for edge in edges if edge[0] in current_layer} # nodes following the current layer
+        i += 1
+    
+    for node in current_layer:
+        layer_idx[node] = i
+
+
+    best_layers = []
+    layer_counts = []
+    for i in range(max(layer_idx.values())+1):
+        best_layers.append([node for node in layer_idx if layer_idx[node] == i])
+        layer_counts.append(len(best_layers[-1]))
+
+    # pad the layers with None so that they are all the same length
+    max_layer_length = max(layer_counts)
+    for i in range(len(best_layers)):
+        best_layers[i] += [None] * (max_layer_length - layer_counts[i])
+    
+    for layer in best_layers:
+        random.shuffle(layer)
+
+    best_node_locations = node_locations_from_layers(best_layers)
+    min_cost = cost_fn(edges, best_node_locations)
+    for i in range(100):
+        done = True
+        for layer_config in iter_swaps(best_layers):
+            node_locations = node_locations_from_layers(layer_config)
+            cost = cost_fn(edges, node_locations)
+            if cost < min_cost:
+                min_cost = cost
+                best_node_locations = node_locations
+                best_layers = layer_config
+                done = False
+                break
+        if done:
+            break
+        print(i, min_cost)
 
     
+    return best_node_locations
+
+
+
+def node_locations_from_layers(layers):
+    node_locations = {}
+
+    max_layer_height = max([len(layer) for layer in layers]) - 1
+
+    for i, layer in enumerate(layers):
+        if len(layer) == 1:
+            node_locations[layer[0]] = (i, max_layer_height / 2)
+            continue
+
+        for j, node in enumerate(layer):
+            if node is None:
+                continue
+            # y_offset = 0.25 if i % 2 == 1 else -0.25
+            y_offset = 0
+            node_locations[node] = (i, j + y_offset)
+        
+    return node_locations
+
+
+def iter_swaps(layers):
+    # iterate over different configurations of the layers where each node is swapped with a node in the same layer
+    # this is a generator function
+
+    for i, layer in enumerate(layers):
+        for j, node in enumerate(layer):
+            for k, other_node in enumerate(layer):
+                if j >= k: # only swap each node once
+                    continue
+                new_layers = copy.deepcopy(layers)
+                new_layers[i][j] = other_node
+                new_layers[i][k] = node
+                yield new_layers

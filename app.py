@@ -2,7 +2,7 @@ import dash
 from dash.dependencies import Input, Output, State
 import dash_cytoscape as cyto
 from gradient_sheets import get_tensor_sheet, get_grads, percent_grads
-from sheet_graph import find_edges, get_labels, get_node_locations
+from sheet_graph import find_edges, get_labels, get_node_locations_v2, count_crossings
 
 import gspread
 
@@ -18,7 +18,8 @@ formula_sheet = worksheet.get_values(value_render_option='FORMULA')
 
 edges = find_edges(formula_sheet)
 
-node_locations = get_node_locations(edges)
+node_locations = get_node_locations_v2(edges)
+
 cell_names = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
 
 labels = get_labels(cell_names, formula_sheet)
@@ -79,7 +80,7 @@ app.layout = cyto.Cytoscape(
         "positions": {
             cell_name: {
                 'x': node_locations[cell_name][0]*100,
-                'y': node_locations[cell_name][1]*50
+                'y': node_locations[cell_name][1]*75
             }
             for cell_name in cell_names
         }    
@@ -87,7 +88,7 @@ app.layout = cyto.Cytoscape(
     stylesheet=default_stylesheet,
     style={
         'width': '100%',
-        'height': '45em',
+        'height': '100vh',
         'border-style':
         'solid',
         "background-color": "#272822"
@@ -133,8 +134,11 @@ def update_stylesheet(node_data):
     p_grads = percent_grads(grads, tensor_sheet, node_data['id'])
 
     stylesheet = default_stylesheet.copy()
+    cell_names = list(p_grads.keys())
+    grads = list(p_grads.values())
+    labels = get_labels(cell_names, formula_sheet)
 
-    for cell_name, grad in p_grads.items():
+    for cell_name, grad, label in zip(cell_names, grads, labels):
         if cell_name == clicked_cell_name:
             continue
 
@@ -143,7 +147,8 @@ def update_stylesheet(node_data):
         stylesheet.append({
             'selector': f'node[id = "{cell_name}"]',
             'style': {
-                'background-color': color
+                'background-color': color,
+                'content': f'{grad:.2f}\n{label}'
             }
         })
     

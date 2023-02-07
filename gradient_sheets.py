@@ -111,7 +111,7 @@ def percent_grads(grads: list[list[Tensor]], tensor_sheet: list[list[Tensor]], t
         row_idx -= 1
         col_idx -= 1
         tensor = tensor_sheet[row_idx][col_idx]
-        p_grads[cell_name] = (grad * tensor.item() / 100) / target_tensor.item()
+        p_grads[cell_name] = grad * tensor.item() / target_tensor.item()
 
     return p_grads
 
